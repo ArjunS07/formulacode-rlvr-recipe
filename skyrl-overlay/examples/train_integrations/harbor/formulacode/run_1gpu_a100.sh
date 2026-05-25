@@ -9,10 +9,16 @@ set -euo pipefail
 
 # export WANDB_API_KEY=your_key_here
 
+# Resolve paths relative to this script — works on any machine
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKYRL_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"       # .../SkyRL
+REPO_ROOT="$(cd "$SKYRL_DIR/.." && pwd)"                  # .../formulacode-rlvr-recipe
+
 #-----------------------
 # Tasks (5 tasks, 1 unique prompt per step)
 #-----------------------
-TASKS_BASE="/mnt/sdd3/asharma/formulacode-rlvr/harbor-tasks-may18"
+# Default: harbor-tasks-may18 sits next to the repo. Override via env var if needed.
+TASKS_BASE="${TASKS_BASE:-$(cd "$REPO_ROOT/.." && pwd)/harbor-tasks-may18}"
 TRAIN_DATA="[
   '$TASKS_BASE/shapely_shapely_2359',
   '$TASKS_BASE/pvlib_pvlib-python_369',
@@ -31,8 +37,8 @@ SERVED_MODEL_NAME="qwen3.5-4b"
 # Directories
 #-----------------------
 RUN_NAME="formulacode-grpo-g4-1gpu"
-STORAGE_ROOT="/mnt/sdd3/asharma/formulacode-rlvr/results/$RUN_NAME"
-TRIALS_DIR="/mnt/sdd3/asharma/formulacode-rlvr/results/trials"
+STORAGE_ROOT="$REPO_ROOT/results/$RUN_NAME"
+TRIALS_DIR="$REPO_ROOT/results/trials"
 CKPTS_DIR="$STORAGE_ROOT/ckpts"
 EXPORTS_DIR="$STORAGE_ROOT/exports"
 LOG_DIR="$STORAGE_ROOT/logs"
@@ -63,7 +69,7 @@ ENABLE_RATE_LIMITING=true
 TRAJECTORIES_PER_SECOND=1.0
 MAX_CONCURRENCY=4            # 4 Docker trials at once (one per sample slot)
 
-CHAT_TEMPLATE_PATH="/mnt/sdd3/asharma/formulacode-rlvr/SkyRL/skyrl/train/utils/templates/qwen3_acc_thinking.jinja2"
+CHAT_TEMPLATE_PATH="$SKYRL_DIR/skyrl/train/utils/templates/qwen3_acc_thinking.jinja2"
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 

@@ -1,0 +1,20 @@
+# SkyRL framework — cloned fresh by setup.sh
+SkyRL/
+
+# Training outputs — large, machine-local
+results/
+*.log
+
+# Harbor trial working dirs (also inside results/ but be explicit)
+trials/
+
+# Python virtual environments
+.venv/
+**/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.egg-info/
+
+# uv lockfile caches
+.uv/

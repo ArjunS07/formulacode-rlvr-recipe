@@ -1,0 +1,45 @@
+# @package harbor_trial_config
+#
+# FormulaCode Harbor config for single A100 80GB.
+# 32k context window; max_input_tokens must match MAX_MODEL_LEN in run_1gpu_a100.sh.
+
+trials_dir: /mnt/sdd3/asharma/formulacode-rlvr/results/trials
+
+timeout_multiplier: 1.0
+
+agent:
+  name: terminus-2
+
+  override_timeout_sec: 3600
+
+  kwargs:
+    parser_name: xml
+    interleaved_thinking: true
+    max_turns: 32
+    suppress_max_turns_warning: true
+    enable_summarize: false
+    collect_rollout_details: true
+    temperature: 1.0
+
+    model_info:
+      max_input_tokens: 32768
+      max_output_tokens: 8192
+      input_cost_per_token: 0.0
+      output_cost_per_token: 0.0
+
+    llm_kwargs:
+      timeout: 900
+      max_retries: 0
+      top_p: 1.0
+      top_k: -1
+      min_p: 0.0
+
+environment:
+  type: docker
+  override_cpus: 3
+  override_memory_mb: 16384
+  override_storage_mb: 10240
+  suppress_override_warnings: true
+
+verifier:
+  disable: false

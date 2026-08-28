@@ -107,6 +107,16 @@ async def run_one(task_key: str, sem: asyncio.Semaphore, collect_only: bool = Fa
             return rec
     rec["trial_dir"] = str(RESULTS_DIR / cfg["trial_name"])
     rec.update(_read_reward(Path(rec["trial_dir"])))
+    # Publish the oracle baseline snapshot to the prod store (durable, host-side).
+    try:
+        from publish_snapshots import publish_snapshot
+        owner, rest = label.split("/", 1)
+        repo, issue = rest.split("#", 1)
+        snap = Path(rec["trial_dir"]) / "artifacts" / ".snapshots"
+        st, _ = publish_snapshot(owner, repo, issue, snap)
+        rec["snapshot_published"] = st
+    except Exception as e:  # noqa: BLE001 — publishing is best-effort
+        rec["snapshot_published"] = f"error: {e}"
     done = datetime.now(timezone.utc).strftime("%H:%M:%S")
     print(
         f"[{done}] DONE  {label}: benches={rec.get('n_benchmarks')} "

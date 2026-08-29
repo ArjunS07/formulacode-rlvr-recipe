@@ -25,13 +25,23 @@ warnings.filterwarnings(
     "ignore", category=RuntimeWarning, message="Mean of empty slice"
 )
 
-# ─── CONFIG ────────────────────────────────────────────────────────────────────
+# ─── CONFIG (survey defaults; overridden by CLI args / qwen auto-detect) ───────
 PASSK_DIR = Path("results/passk")
 TRIALS_DIR = Path("results/trials")
 OUT_DIR = Path("results/plots")
 
-TASKS = ["h11", "pvlib", "networkx", "joblib"]
-ORACLE_H = {"h11": 1.203, "pvlib": 22.563, "networkx": 1.3229, "joblib": 1.9524}
+MODE = "survey"  # "survey" = terminus bash keystrokes; "qwen" = native tool_calls
+DEFAULT_ORACLE_TABLE = Path(
+    "/home/arjun/formulacode-verified-rl/initial_survey/oracle/gold_oracle_benchmarks.json"
+)
+SURVEY_TASKS = ["h11", "pvlib", "networkx", "joblib"]
+SURVEY_ORACLE_H = {"h11": 1.203, "pvlib": 22.563, "networkx": 1.3229, "joblib": 1.9524}
+TASKS = list(SURVEY_TASKS)
+ORACLE_H = dict(SURVEY_ORACLE_H)
+
+# Qwen-coder native tool names (not bash keystrokes) → edit/write vs read.
+QWEN_WRITE_TOOLS = {"edit", "write_file", "replace"}
+QWEN_READ_TOOLS = {"read_file", "read_many_files", "glob", "grep_search", "ls"}
 
 TEST_PAT = re.compile(r"/(test_|tests/|_test\.py)", re.IGNORECASE)
 ASV_PAT = re.compile(r"asv\.conf\.json")
@@ -82,7 +92,8 @@ plt.rcParams.update(
     }
 )
 PALETTE = sns.color_palette("colorblind")
-TASK_COLOR = {task: PALETTE[i] for i, task in enumerate(TASKS + ["joblib"])}
+# Rebuilt in configure() once TASKS is finalized; modulo lets it wrap past 10 tasks.
+TASK_COLOR = {task: PALETTE[i % len(PALETTE)] for i, task in enumerate(TASKS)}
 
 TAXONOMY_ORDER = [
     "no_source_edit",
@@ -140,8 +151,10 @@ def mono_ticks(ax, labels, axis="x", **kw):
 
 
 class Trial:
-    def __init__(self, task: str, entry: dict, tdir: Path):
+    def __init__(self, task: str, entry: dict, tdir: Path, mode: str = "survey"):
         self.task = task
+        self.mode = mode
+        self.tdir = tdir
         self.trial_id = entry["trial_id"]
         self.idx = entry.get("idx", 0)
         self.reward = entry.get("reward", 0.0)
@@ -164,13 +177,56 @@ class Trial:
         self.max_turns = akw.get("max_turns", 64)
         self.max_input_tokens = akw.get("model_info", {}).get("max_input_tokens", 55000)
 
+        # Qwen extras: termination + token counts live in result.json, not the trajectory.
+        self.exc_type = None
+        self._qwen_tokens = None  # (prompt_lens, compl_lens) per rollout turn
+        if mode == "qwen":
+            self._load_qwen_result(tdir)
+
+    def _load_qwen_result(self, tdir: Path):
+        """Pull harbor exception + per-turn token-id lengths from result.json."""
+        try:
+            res = json.loads((tdir / "result.json").read_text())
+        except Exception:
+            return
+        ei = res.get("exception_info") or {}
+        self.exc_type = ei.get("exception_type")
+        self._exc_msg = ei.get("exception_message", "") or ""
+        rd = (res.get("agent_result") or {}).get("rollout_details") or []
+        if rd:
+            r0 = rd[0]
+            pids = r0.get("prompt_token_ids") or []
+            cids = r0.get("completion_token_ids") or []
+            self._qwen_tokens = ([len(p) for p in pids], [len(c) for c in cids])
+
     # ── derived properties ─────────────────────────────────────────────────────
 
     def n_turns(self) -> int:
         return len(self.steps)
 
+    def _is_source_path(self, p: str) -> bool:
+        """A repo source file: not a test, not an asv/config file."""
+        p = p.replace("/workspace/repo/", "").lstrip("/")
+        base = p.rsplit("/", 1)[-1]
+        is_test = TEST_PAT.search("/" + p) or base.startswith("test_")
+        return bool(p) and not ASV_PAT.search(p) and not is_test
+
+    def _qwen_source_edits(self) -> list:
+        """(turn_idx, path) for native edit/write_file/replace calls to source files."""
+        edits = []
+        for i, step in enumerate(self.steps):
+            for tc in step.get("tool_calls", []):
+                if tc.get("function_name") not in QWEN_WRITE_TOOLS:
+                    continue
+                p = (tc.get("arguments", {}) or {}).get("file_path", "")
+                if p and self._is_source_path(p):
+                    edits.append((i, p.replace("/workspace/repo/", "")))
+        return edits
+
     def source_edits(self) -> list:
         """List of (turn_idx, filepath) for writes to source files."""
+        if self.mode == "qwen":
+            return self._qwen_source_edits()
         edits = []
         for i, step in enumerate(self.steps):
             for tc in step.get("tool_calls", []):
@@ -195,6 +251,8 @@ class Trial:
         return edits
 
     def termination(self) -> str:
+        if self.mode == "qwen":
+            return self._qwen_termination()
         for step in self.steps:
             for tc in step.get("tool_calls", []):
                 if tc.get("function_name") == "mark_task_complete":
@@ -203,6 +261,20 @@ class Trial:
         if last.get("prompt_tokens", 0) >= 0.92 * self.max_input_tokens:
             return "context_limit"
         return "max_turns"
+
+    def _qwen_termination(self) -> str:
+        """Map harbor exception + qwen stdout to task_complete/context_limit/max_turns."""
+        if not self.exc_type:
+            return "task_complete"  # clean exit == agent declared done
+        blob = self._exc_msg
+        if "context length" not in blob:  # API 400 is tee'd to qwen-code.txt, not exc_msg
+            try:
+                blob += (self.tdir / "agent" / "qwen-code.txt").read_text()
+            except Exception:
+                pass
+        if "maximum context length" in blob or "context length is" in blob:
+            return "context_limit"
+        return "max_turns"  # timeout / SIGTERM / other non-zero exit
 
     def taxonomy(self) -> str:
         # patch_added > 0 is ground truth from the verifier diff; source_edits()
@@ -219,14 +291,47 @@ class Trial:
         return "partial"
 
     def token_series(self):
+        if self.mode == "qwen":
+            # Per-turn token-id list lengths captured by the recording proxy.
+            return self._qwen_tokens if self._qwen_tokens else ([], [])
         prompt = [s.get("metrics", {}).get("prompt_tokens", 0) for s in self.steps]
         compl = [s.get("metrics", {}).get("completion_tokens", 0) for s in self.steps]
         return prompt, compl
+
+    def _qwen_cat(self, tc: dict) -> str:
+        """Category for one native qwen tool call."""
+        fn = tc.get("function_name", "")
+        if fn in QWEN_WRITE_TOOLS:
+            return "write"
+        if fn in QWEN_READ_TOOLS:
+            return "read"
+        if fn == "todo_write":
+            return "setup"
+        if fn == "run_shell_command":
+            cmd = (tc.get("arguments", {}) or {}).get("command", "")
+            if WRITE_RE.search(cmd) or re.search(r"cat\s*>{1,2}|tee\s", cmd):
+                return "write"
+            if RUN_RE.match(cmd):
+                return "run"
+            if READ_RE.match(cmd):
+                return "read"
+            if NAV_RE.match(cmd):
+                return "nav"
+            if SETUP_RE.match(cmd):
+                return "setup"
+            return "run"  # default: shell command is an execution
+        return "other"
 
     def tool_call_cats(self) -> list:
         """List of (turn_fraction 0-1, category) for each tool call."""
         n = max(self.n_turns(), 1)
         result = []
+        if self.mode == "qwen":
+            for i, step in enumerate(self.steps):
+                frac = i / n
+                for tc in step.get("tool_calls", []):
+                    result.append((frac, self._qwen_cat(tc)))
+            return result
         for i, step in enumerate(self.steps):
             frac = i / n
             for tc in step.get("tool_calls", []):
@@ -253,8 +358,9 @@ class Trial:
 def load_trials() -> list:
     """Load trials directly from results/trials/ — avoids JSONL-per-batch staleness."""
     trials = []
+    glob_pat = "{task}__*" if MODE == "qwen" else "{task}_agent_*"
     for task in TASKS:
-        for tdir in sorted(TRIALS_DIR.glob(f"{task}_agent_*")):
+        for tdir in sorted(TRIALS_DIR.glob(glob_pat.format(task=task))):
             reward_txt = tdir / "verifier" / "reward.txt"
             reward_json = tdir / "verifier" / "reward.json"
             if not reward_txt.exists() or not reward_json.exists():
@@ -288,7 +394,7 @@ def load_trials() -> list:
                 "patch_removed": patch_removed,
             }
             try:
-                t = Trial(task, entry, tdir)
+                t = Trial(task, entry, tdir, mode=MODE)
                 trials.append(t)
             except Exception as e:
                 print(f"  ERROR {tid}: {e}")
@@ -366,11 +472,12 @@ def plot_speedup_distributions(trials: list):
     fig, axes = plt.subplots(
         1, len(TASKS), figsize=(3.5 * len(TASKS), 4.5), sharey=False
     )
+    axes = np.atleast_1d(axes)  # single-task qwen returns a bare Axes
 
     for ax, task in zip(axes, TASKS):
         ts = by_task[task]
         vals = [t.speedup for t in ts]
-        H = ORACLE_H[task]
+        H = ORACLE_H.get(task)  # may be absent for qwen tasks not in the oracle table
         color = TASK_COLOR[task]
 
         # Clip outliers
@@ -413,7 +520,8 @@ def plot_speedup_distributions(trials: list):
         )
 
         # reference lines
-        ax.axhline(H, color="black", lw=1.2, ls="--", zorder=4, label=r"oracle $H$")
+        if H is not None and not (isinstance(H, float) and np.isnan(H)):
+            ax.axhline(H, color="black", lw=1.2, ls="--", zorder=4, label=r"oracle $H$")
         ax.axhline(1.0, color="gray", lw=0.8, ls=":", zorder=4, label=r"no-op")
 
         ax.set_xlim(-0.6, 0.6)
@@ -441,6 +549,7 @@ def plot_reward_distributions(trials: list):
     fig, axes = plt.subplots(
         1, len(TASKS), figsize=(3.5 * len(TASKS), 5.0), sharey=True
     )
+    axes = np.atleast_1d(axes)  # single-task qwen returns a bare Axes
 
     REGION_BOUNDARY_LO = -0.5  # between broken and regression
     REGION_BOUNDARY_HI = 1.0  # between regression and speedup
@@ -581,6 +690,7 @@ def plot_edit_raster(trials: list):
     fig, axes = plt.subplots(
         1, len(TASKS), figsize=(4.5 * len(TASKS), 4.5), sharey=True
     )
+    axes = np.atleast_1d(axes)  # single-task qwen returns a bare Axes
 
     for ax, task in zip(axes, TASKS):
         ts = by_task[task]
@@ -668,7 +778,8 @@ def plot_edit_raster(trials: list):
 
 def _token_curves(trials, token_idx: int):
     """Build ragged token-per-turn matrix across trials → (mean, lo, hi) per turn."""
-    max_t = max(t.n_turns() for t in trials)
+    # Use the longest of turn-count or token series (qwen rollouts can be +1 turn).
+    max_t = max(max(t.n_turns(), len(t.token_series()[token_idx])) for t in trials)
     mat = np.full((len(trials), max_t), np.nan)
     for r, t in enumerate(trials):
         series = t.token_series()[token_idx]
@@ -731,6 +842,7 @@ def plot_tool_calls(trials: list):
     cat_colors = {c: PALETTE[i] for i, c in enumerate(cats)}
 
     fig, axes = plt.subplots(1, len(TASKS), figsize=(3.5 * len(TASKS), 4), sharey=True)
+    axes = np.atleast_1d(axes)  # single-task qwen returns a bare Axes
 
     for ax, task in zip(axes, TASKS):
         ts = by_task[task]
@@ -1424,8 +1536,9 @@ def plot_exploration_overhead(trials: list):
 def load_lsv_stats() -> list:
     """Load per-trial LSV benchmark-selection and timing data from artifact JSONs."""
     stats = []
+    glob_pat = "{task}__*" if MODE == "qwen" else "{task}_agent_*"
     for task in TASKS:
-        for tdir in sorted(TRIALS_DIR.glob(f"{task}_agent_*")):
+        for tdir in sorted(TRIALS_DIR.glob(glob_pat.format(task=task))):
             init_f = tdir / "artifacts" / "lsv" / "lsv_init_results.json"
             meas_f = tdir / "artifacts" / "lsv" / "lsv_measure_results.json"
             rew_f = tdir / "verifier" / "reward.json"
@@ -1899,7 +2012,7 @@ def plot_lsv_overhead_distribution(stats: list):
 
 def plot_reward_vs_speedup(trials: list):
     """Scatter: raw LSV speedup (x) vs reward (y), highlighting reward=-1 cases."""
-    task_colors = {t: PALETTE[i] for i, t in enumerate(TASKS)}
+    task_colors = {t: PALETTE[i % len(PALETTE)] for i, t in enumerate(TASKS)}
 
     # Collect points: only trials where benchmarks were actually measured
     points = [t for t in trials if t.n_benchmarks > 0]
@@ -1992,7 +2105,67 @@ def analyze_reward_hacking(trials: list):
 # ─── MAIN ──────────────────────────────────────────────────────────────────────
 
 
+def load_oracle_table(path: Path) -> dict:
+    """Map task_dir basename -> oracle mean speedup H (verifier lsv_mean_speedup)."""
+    try:
+        data = json.loads(Path(path).read_text())
+    except Exception as e:
+        print(f"  WARN: can't read oracle table {path}: {e}")
+        return {}
+    out = {}
+    for entry in data.get("tasks", {}).values():
+        td, H = entry.get("task_dir"), entry.get("lsv_mean_speedup")
+        if td and isinstance(H, (int, float)):
+            out[td] = float(H)
+    return out
+
+
+def discover_tasks(trials_dir: Path) -> list:
+    """Derive qwen tasks (<org>__<repo>__<num>) from trial dir names, strip suffix."""
+    tasks = set()
+    for tdir in trials_dir.glob("*__*"):
+        if (tdir / "verifier" / "reward.json").exists():
+            tasks.add(tdir.name.rsplit("__", 1)[0])
+    return sorted(tasks)
+
+
+def parse_args():
+    import argparse
+
+    ap = argparse.ArgumentParser(description="Pass@k / behavioral plots for trials.")
+    ap.add_argument("--trials-dir", type=Path, default=None)
+    ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--oracle-table", type=Path, default=None)
+    ap.add_argument("--tasks", nargs="*", default=None, help="optional task filter")
+    ap.add_argument("--survey", action="store_true", help="force terminus/survey mode")
+    return ap.parse_args()
+
+
+def configure(args):
+    """Set module globals from CLI; auto-detect qwen mode unless --survey/no override."""
+    global MODE, TRIALS_DIR, OUT_DIR, TASKS, ORACLE_H, TASK_COLOR
+    if args.trials_dir:
+        TRIALS_DIR = args.trials_dir
+    if args.out_dir:
+        OUT_DIR = args.out_dir
+
+    MODE = "survey" if (args.survey or args.trials_dir is None) else "qwen"
+    if MODE == "survey":
+        TASKS = list(SURVEY_TASKS)
+        ORACLE_H = dict(SURVEY_ORACLE_H)
+    else:
+        TASKS = discover_tasks(TRIALS_DIR)
+        ORACLE_H = load_oracle_table(args.oracle_table or DEFAULT_ORACLE_TABLE)
+
+    if args.tasks:
+        keep = set(args.tasks)
+        TASKS = [t for t in TASKS if t in keep]
+    TASK_COLOR = {task: PALETTE[i % len(PALETTE)] for i, task in enumerate(TASKS)}
+    print(f"MODE={MODE}  trials={TRIALS_DIR}  out={OUT_DIR}  tasks={TASKS}")
+
+
 def main():
+    configure(parse_args())
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     trials = load_trials()
 

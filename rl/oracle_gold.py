@@ -42,13 +42,34 @@ OVERRIDE_STORAGE_MB = 10240
 MAX_CONCURRENCY = 3  # oracle trials in flight at once (CPU-bound)
 
 # task key -> (task dir name, "owner/repo#issue")
+# The survey's gold-8 + breadth-~12 (QWEN_HARNESS_AUDIT.md). Note: tiledb-py#1005 is
+# NOT in the gold-8 (it is a breadth candidate) but is kept here since its oracle entry
+# already exists. The RL training set is chosen downstream (run_local_train.sh), not here.
 GOLD_TASKS: dict[str, tuple[str, str]] = {
+    # ── gold-8 ───────────────────────────────────────────────────────────────
     "shapely#1307": ("shapely__shapely__1307", "shapely/shapely#1307"),
     "geopandas#3345": ("geopandas__geopandas__3345", "geopandas/geopandas#3345"),
     "uxarray#1118": ("UXARRAY__uxarray__1118", "UXARRAY/uxarray#1118"),
-    "tiledb-py#1005": ("TileDB-Inc__TileDB-Py__1005", "TileDB-Inc/TileDB-Py#1005"),
     "flox#176": ("xarray-contrib__flox__176", "xarray-contrib/flox#176"),
     "flox#172": ("xarray-contrib__flox__172", "xarray-contrib/flox#172"),
+    "numpy-financial#96": ("numpy__numpy-financial__96", "numpy/numpy-financial#96"),
+    "networkx#6337": ("networkx__networkx__6337", "networkx/networkx#6337"),
+    "flox#53": ("xarray-contrib__flox__53", "xarray-contrib/flox#53"),
+    # ── breadth (survey 18-task mixed-sign candidates) ───────────────────────
+    "tiledb-py#1005": ("TileDB-Inc__TileDB-Py__1005", "TileDB-Inc/TileDB-Py#1005"),
+    "uxarray#1112": ("UXARRAY__uxarray__1112", "UXARRAY/uxarray#1112"),
+    "tiled#1169": ("bluesky__tiled__1169", "bluesky/tiled#1169"),
+    "tiled#1213": ("bluesky__tiled__1213", "bluesky/tiled#1213"),
+    "tiled#982": ("bluesky__tiled__982", "bluesky/tiled#982"),
+    "joblib#484": ("joblib__joblib__484", "joblib/joblib#484"),
+    "networkx#8138": ("networkx__networkx__8138", "networkx/networkx#8138"),
+    "numpy-financial#47": ("numpy__numpy-financial__47", "numpy/numpy-financial#47"),
+    "bottleneck#298": ("pydata__bottleneck__298", "pydata/bottleneck#298"),
+    "bottleneck#305": ("pydata__bottleneck__305", "pydata/bottleneck#305"),
+    "shapely#2359": ("shapely__shapely__2359", "shapely/shapely#2359"),
+    "flox#70": ("xarray-contrib__flox__70", "xarray-contrib/flox#70"),
+    "xdsl#1159": ("xdslproject__xdsl__1159", "xdslproject/xdsl#1159"),
+    "xdsl#1332": ("xdslproject__xdsl__1332", "xdslproject/xdsl#1332"),
 }
 
 

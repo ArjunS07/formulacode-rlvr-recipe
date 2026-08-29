@@ -11,6 +11,7 @@ Run: /home/arjun/skyrl-formulacode/.venv/bin/python rl/qwen_rollout_proxy.py \
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import time
 import uuid
@@ -22,8 +23,14 @@ from aiohttp import ClientSession, ClientTimeout, web
 # ── in-memory per-session rollout store ─────────────────────────────────────
 # session_id -> list of per-turn dicts {prompt_token_ids, completion_token_ids, logprobs}
 _ROLLOUTS: dict[str, list[dict[str, Any]]] = defaultdict(list)
+_LAST_WRITE: dict[str, float] = {}          # session_id -> last append time, for TTL eviction
 _UPSTREAM: str = "http://127.0.0.1:30021/v1"
+_SESSION: ClientSession | None = None       # shared upstream client (created on startup)
 _VERBOSE = False
+
+_UPSTREAM_TIMEOUT = 1800   # per-turn upstream ceiling (s); well under the 2400s agent cap
+_SESSION_TTL = 3600        # evict a session's turns if unfetched this long (trial can't outlive it)
+_SWEEP_INTERVAL = 300
 
 
 def _log(msg: str) -> None:
@@ -31,15 +38,20 @@ def _log(msg: str) -> None:
 
 
 def _extract_capture(resp: dict) -> dict[str, Any] | None:
-    """Pull (prompt_token_ids, completion_token_ids, logprobs) from a non-streaming
-    vLLM ChatCompletionResponse. Returns None if the shapes are missing."""
+    """Pull (prompt_token_ids, completion_token_ids, logprobs) from a non-streaming vLLM response.
+    Returns None if shapes are missing, the completion/logprobs lengths disagree, or the completion
+    is empty — recording a mismatched turn would silently corrupt or mask the whole trajectory."""
     try:
         choice = resp["choices"][0]
         prompt_token_ids = resp.get("prompt_token_ids")
         completion_token_ids = choice.get("token_ids")
         lp = (choice.get("logprobs") or {}).get("content") or []
         logprobs = [t.get("logprob") for t in lp]
-        if prompt_token_ids is None or completion_token_ids is None:
+        if prompt_token_ids is None or not completion_token_ids:
+            return None
+        if len(completion_token_ids) != len(logprobs):
+            _log(f"WARN token_ids/logprobs length mismatch ({len(completion_token_ids)} vs "
+                 f"{len(logprobs)}) — dropping turn")
             return None
         return {
             "prompt_token_ids": prompt_token_ids,
@@ -83,18 +95,17 @@ def _to_sse_chunks(resp: dict) -> list[str]:
 
 
 async def _forward_nonstream(body: dict) -> dict:
-    """Make a non-streaming upstream call with token/logprob capture enabled."""
+    """Make a non-streaming upstream call with token/logprob capture enabled (shared session)."""
     up_body = dict(body)
     up_body["stream"] = False
     up_body.pop("stream_options", None)
     up_body["logprobs"] = True
     up_body.setdefault("top_logprobs", 1)
     up_body["return_token_ids"] = True
-    timeout = ClientTimeout(total=None)
-    async with ClientSession(timeout=timeout) as s:
-        async with s.post(f"{_UPSTREAM}/chat/completions", json=up_body,
-                          headers={"Content-Type": "application/json"}) as r:
-            return await r.json()
+    assert _SESSION is not None, "upstream session not initialized"
+    async with _SESSION.post(f"{_UPSTREAM}/chat/completions", json=up_body,
+                             headers={"Content-Type": "application/json"}) as r:
+        return await r.json()
 
 
 async def handle_chat(request: web.Request) -> web.StreamResponse:
@@ -108,22 +119,15 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
 
     resp = await _forward_nonstream(body)
 
-    if "error" in resp and "choices" not in resp:
-        # surface upstream errors (e.g. context length) to qwen unchanged
-        _log(f"sid={sid[:8]} UPSTREAM ERROR: {str(resp.get('error'))[:160]}")
-        return web.json_response(resp, status=int(
-            (resp.get("error") or {}).get("code", 500) if str(
-                (resp.get("error") or {}).get("code", "")).isdigit() else 500))
+    # surface upstream errors (or a malformed 200 with no choices) to qwen instead of crashing
+    if "choices" not in resp:
+        _log(f"sid={sid[:8]} UPSTREAM ERROR/malformed: {str(resp.get('error') or resp)[:160]}")
+        code = (resp.get("error") or {}).get("code", 500)
+        status = int(code) if str(code).isdigit() else 500
+        return web.json_response(resp if "error" in resp else {"error": {"message": "no choices"}},
+                                 status=status)
 
-    cap = _extract_capture(resp)
-    if cap is not None:
-        _ROLLOUTS[sid].append(cap)
-        if _VERBOSE:
-            _log(f"sid={sid[:8]} CAPTURED turn#{len(_ROLLOUTS[sid])}: "
-                 f"prompt={len(cap['prompt_token_ids'])} completion={len(cap['completion_token_ids'])} "
-                 f"logprobs={len(cap['logprobs'])}")
-    else:
-        _log(f"sid={sid[:8]} WARN: could not capture token_ids/logprobs this turn")
+    cap = _extract_capture(resp)  # appended only after successful delivery (retry-safe)
 
     # strip fields qwen doesn't expect before handing back
     clean = dict(resp)
@@ -132,8 +136,20 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     for ch in clean.get("choices", []):
         ch.pop("token_ids", None)
 
+    def _record() -> None:
+        if cap is None:
+            _log(f"sid={sid[:8]} WARN: could not capture token_ids/logprobs this turn")
+            return
+        _ROLLOUTS[sid].append(cap)
+        _LAST_WRITE[sid] = time.time()
+        if _VERBOSE:
+            _log(f"sid={sid[:8]} CAPTURED turn#{len(_ROLLOUTS[sid])}: "
+                 f"prompt={len(cap['prompt_token_ids'])} completion={len(cap['completion_token_ids'])}")
+
     if not wants_stream:
-        return web.json_response(clean)
+        resp_out = web.json_response(clean)
+        _record()
+        return resp_out
 
     sse = web.StreamResponse(status=200, headers={
         "Content-Type": "text/event-stream", "Cache-Control": "no-cache",
@@ -142,6 +158,7 @@ async def handle_chat(request: web.Request) -> web.StreamResponse:
     for c in _to_sse_chunks(clean):
         await sse.write(c.encode())
     await sse.write_eof()
+    _record()   # record only after the turn is fully delivered, so a mid-stream retry can't double-count
     return sse
 
 
@@ -173,6 +190,34 @@ async def handle_health(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok", "sessions": len(_ROLLOUTS)})
 
 
+async def _sweeper(app: web.Application) -> None:
+    """Evict turns from sessions whose trial died before fetching (no ?pop), bounding memory."""
+    try:
+        while True:
+            await asyncio.sleep(_SWEEP_INTERVAL)
+            now = time.time()
+            stale = [s for s, t in _LAST_WRITE.items() if now - t > _SESSION_TTL]
+            for s in stale:
+                _ROLLOUTS.pop(s, None)
+                _LAST_WRITE.pop(s, None)
+            if stale:
+                _log(f"swept {len(stale)} stale sessions ({len(_ROLLOUTS)} live)")
+    except asyncio.CancelledError:
+        pass
+
+
+async def _on_startup(app: web.Application) -> None:
+    global _SESSION
+    _SESSION = ClientSession(timeout=ClientTimeout(total=_UPSTREAM_TIMEOUT, sock_connect=30))
+    app["sweeper"] = asyncio.create_task(_sweeper(app))
+
+
+async def _on_cleanup(app: web.Application) -> None:
+    app["sweeper"].cancel()
+    if _SESSION is not None:
+        await _SESSION.close()
+
+
 def build_app() -> web.Application:
     app = web.Application(client_max_size=1024 ** 3)
     app.router.add_post("/trial/{sid}/v1/chat/completions", handle_chat)
@@ -181,6 +226,8 @@ def build_app() -> web.Application:
     app.router.add_get("/trial/{sid}/rollout", handle_rollout)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_get("/health", handle_health)
+    app.on_startup.append(_on_startup)
+    app.on_cleanup.append(_on_cleanup)
     return app
 
 

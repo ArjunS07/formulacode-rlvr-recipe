@@ -219,13 +219,21 @@ async def main_async(task_keys: list[str], collect_only: bool = False) -> None:
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     recs = await asyncio.gather(*(run_one(k, sem, collect_only) for k in task_keys))
 
+    # Merge into any existing table so a partial re-run (--tasks subset) updates only those keys
+    # instead of truncating the 40-entry gold table.
+    existing_tasks: dict = {}
+    if ORACLE_TABLE.exists():
+        try:
+            existing_tasks = json.loads(ORACLE_TABLE.read_text()).get("tasks", {})
+        except (json.JSONDecodeError, OSError):
+            existing_tasks = {}
     table = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "source": "local oracle trials (agent.name=oracle) on this machine",
         "noise_floor": NOISE_FLOOR,
         "lsv_rounds": LSV_ROUNDS,
         "resources": {"cpus": OVERRIDE_CPUS, "memory_mb": OVERRIDE_MEMORY_MB},
-        "tasks": {},
+        "tasks": dict(existing_tasks),
     }
     for r in recs:
         table["tasks"][r["task"]] = {

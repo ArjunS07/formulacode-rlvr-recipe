@@ -1,21 +1,9 @@
 #!/usr/bin/env python3
-"""Recording proxy that lets the qwen-code CLI drive skyrl's local vLLM engine while
-capturing the per-turn token_ids + logprobs GRPO needs (which qwen-code otherwise discards).
-
-Design (see plan `you-are-a-formulacode-vast-dolphin.md`):
-- qwen-code in each trial gets OPENAI_BASE_URL=http://<gw>:<port>/trial/<session_id>/v1 — the
-  session_id lives in the URL PATH, so we associate all of a trial's calls into one trajectory
-  with zero qwen-CLI changes.
-- qwen streams (QWEN_STREAM_IDLE_TIMEOUT_MS). vLLM's streaming chunks don't carry return_token_ids
-  reliably, so for each call we make a NON-streaming upstream request to the vLLM engine with
-  logprobs+return_token_ids, RECORD (prompt_token_ids, completion_token_ids, logprobs), then
-  re-stream the completed result back to qwen as SSE if it asked for a stream.
-- GET /trial/<sid>/rollout returns the assembled RolloutDetail (per-turn arrays) for the
-  QwenCode post-run hook to set context.rollout_details.
-
-Because qwen resends the full growing conversation each turn, each call's prompt_token_ids is a
-strict prefix-superset of the previous prompt+completion → the monotonic-prefix property the
-step-wise merge relies on holds by construction; injected tool results are the masked obs_delta.
+"""Proxy between the qwen-code CLI and skyrl's vLLM engine that records the per-turn
+token_ids+logprobs GRPO needs (qwen-code discards them). Trials pass OPENAI_BASE_URL=
+.../trial/<session_id>/v1 so calls are keyed by session_id; each call is forwarded
+non-streaming with logprobs+return_token_ids, recorded, then re-streamed to qwen as SSE.
+GET /trial/<sid>/rollout returns the assembled per-turn arrays for the QwenCodeRL hook.
 
 Run: /home/arjun/skyrl-formulacode/.venv/bin/python rl/qwen_rollout_proxy.py \
         --port 30022 --upstream http://127.0.0.1:30021/v1  [--verbose]
@@ -63,10 +51,8 @@ def _extract_capture(resp: dict) -> dict[str, Any] | None:
 
 
 def _to_sse_chunks(resp: dict) -> list[str]:
-    """Convert a completed ChatCompletionResponse into OpenAI streaming SSE chunks.
-    Emits: role delta, one content delta (if any), one tool_calls delta (if any),
-    a finish chunk, then [DONE]. A single complete tool_call delta (index/id/name/args)
-    is accepted by standard OpenAI clients."""
+    """Re-emit a completed ChatCompletionResponse as OpenAI streaming SSE chunks (role, content,
+    tool_calls as one complete delta each, then a finish chunk and [DONE])."""
     cid = resp.get("id", f"chatcmpl-{uuid.uuid4().hex}")
     created = resp.get("created", int(time.time()))
     model = resp.get("model", "")

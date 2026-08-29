@@ -75,6 +75,18 @@ GOLD_TASKS: dict[str, tuple[str, str]] = {
     "xdsl#1567": ("xdslproject__xdsl__1567", "xdslproject/xdsl#1567"),
     "geopandas#2939": ("geopandas__geopandas__2939", "geopandas/geopandas#2939"),
     "shapely#1562": ("shapely__shapely__1562", "shapely/shapely#1562"),
+    "tiled#1283": ("bluesky__tiled__1283", "bluesky/tiled#1283"),
+    "networkx#8148": ("networkx__networkx__8148", "networkx/networkx#8148"),
+    "networkx#8218": ("networkx__networkx__8218", "networkx/networkx#8218"),
+    "uxarray#61": ("UXARRAY__uxarray__61", "UXARRAY/uxarray#61"),
+    "bottleneck#327": ("pydata__bottleneck__327", "pydata/bottleneck#327"),
+    "xdsl#1111": ("xdslproject__xdsl__1111", "xdslproject/xdsl#1111"),
+    "xdsl#1460": ("xdslproject__xdsl__1460", "xdslproject/xdsl#1460"),
+    "tiledb-py#834": ("TileDB-Inc__TileDB-Py__834", "TileDB-Inc/TileDB-Py#834"),
+    "networkx#4830": ("networkx__networkx__4830", "networkx/networkx#4830"),
+    "pybop#256": ("pybop-team__PyBOP__256", "pybop-team/PyBOP#256"),
+    "pybamm#465": ("pybamm-team__PyBaMM__465", "pybamm-team/PyBaMM#465"),
+    "networkx#4909": ("networkx__networkx__4909", "networkx/networkx#4909"),
 }
 
 

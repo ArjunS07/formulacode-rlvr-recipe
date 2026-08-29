@@ -41,10 +41,8 @@ OVERRIDE_MEMORY_MB = 12288
 OVERRIDE_STORAGE_MB = 10240
 MAX_CONCURRENCY = 3  # oracle trials in flight at once (CPU-bound)
 
-# task key -> (task dir name, "owner/repo#issue")
-# The survey's gold-8 + breadth-~12 (QWEN_HARNESS_AUDIT.md). Note: tiledb-py#1005 is
-# NOT in the gold-8 (it is a breadth candidate) but is kept here since its oracle entry
-# already exists. The RL training set is chosen downstream (run_local_train.sh), not here.
+# task key -> (task dir name, "owner/repo#issue"). Superset (gold-8 + breadth); the RL training
+# set is chosen downstream in run_local_train_qwen.sh, not here.
 GOLD_TASKS: dict[str, tuple[str, str]] = {
     # ── gold-8 ───────────────────────────────────────────────────────────────
     "shapely#1307": ("shapely__shapely__1307", "shapely/shapely#1307"),
@@ -70,6 +68,13 @@ GOLD_TASKS: dict[str, tuple[str, str]] = {
     "flox#70": ("xarray-contrib__flox__70", "xarray-contrib/flox#70"),
     "xdsl#1159": ("xdslproject__xdsl__1159", "xdslproject/xdsl#1159"),
     "xdsl#1332": ("xdslproject__xdsl__1332", "xdslproject/xdsl#1332"),
+    # ── second breadth wave (mixed-sign diversity candidates) ────────────────
+    "pybop#335": ("pybop-team__PyBOP__335", "pybop-team/PyBOP#335"),
+    "bottleneck#285": ("pydata__bottleneck__285", "pydata/bottleneck#285"),
+    "tiledb-py#467": ("TileDB-Inc__TileDB-Py__467", "TileDB-Inc/TileDB-Py#467"),
+    "xdsl#1567": ("xdslproject__xdsl__1567", "xdslproject/xdsl#1567"),
+    "geopandas#2939": ("geopandas__geopandas__2939", "geopandas/geopandas#2939"),
+    "shapely#1562": ("shapely__shapely__1562", "shapely/shapely#1562"),
 }
 
 

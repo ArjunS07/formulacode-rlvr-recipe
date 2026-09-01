@@ -39,7 +39,7 @@ LSV_ROUNDS = 5
 OVERRIDE_CPUS = 2
 OVERRIDE_MEMORY_MB = 12288
 OVERRIDE_STORAGE_MB = 10240
-MAX_CONCURRENCY = 3  # oracle trials in flight at once (CPU-bound)
+MAX_CONCURRENCY = int(os.environ.get("ORACLE_MAX_CONCURRENCY", "3"))  # oracle trials in flight (CPU-bound)
 
 # task key -> (task dir name, "owner/repo#issue"). Superset (gold-8 + breadth); the RL training
 # set is chosen downstream in run_local_train_qwen.sh, not here.
@@ -146,15 +146,20 @@ async def run_one(task_key: str, sem: asyncio.Semaphore, collect_only: bool = Fa
     rec["trial_dir"] = str(RESULTS_DIR / cfg["trial_name"])
     rec.update(_read_reward(Path(rec["trial_dir"])))
     # Publish the oracle baseline snapshot to the prod store (durable, host-side).
-    try:
-        from publish_snapshots import publish_snapshot
-        owner, rest = label.split("/", 1)
-        repo, issue = rest.split("#", 1)
-        snap = Path(rec["trial_dir"]) / "artifacts" / ".snapshots"
-        st, _ = publish_snapshot(owner, repo, issue, snap)
-        rec["snapshot_published"] = st
-    except Exception as e:  # noqa: BLE001 — publishing is best-effort
-        rec["snapshot_published"] = f"error: {e}"
+    # ORACLE_SKIP_PUBLISH=1 skips it — e.g. a re-measure that only updates the local
+    # speedup table and must not overwrite prod's (rounds-independent, behavioral) snapshots.
+    if os.environ.get("ORACLE_SKIP_PUBLISH") == "1":
+        rec["snapshot_published"] = "skipped"
+    else:
+        try:
+            from publish_snapshots import publish_snapshot
+            owner, rest = label.split("/", 1)
+            repo, issue = rest.split("#", 1)
+            snap = Path(rec["trial_dir"]) / "artifacts" / ".snapshots"
+            st, _ = publish_snapshot(owner, repo, issue, snap)
+            rec["snapshot_published"] = st
+        except Exception as e:  # noqa: BLE001 — publishing is best-effort
+            rec["snapshot_published"] = f"error: {e}"
     done = datetime.now(timezone.utc).strftime("%H:%M:%S")
     print(
         f"[{done}] DONE  {label}: benches={rec.get('n_benchmarks')} "

@@ -4,6 +4,7 @@ SkyRL/
 # Training outputs — large, machine-local
 results/
 *.log
+*.out
 
 # Harbor trial working dirs (also inside results/ but be explicit)
 trials/

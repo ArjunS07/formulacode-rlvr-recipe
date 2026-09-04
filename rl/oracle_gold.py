@@ -87,6 +87,26 @@ GOLD_TASKS: dict[str, tuple[str, str]] = {
     "pybop#256": ("pybop-team__PyBOP__256", "pybop-team/PyBOP#256"),
     "pybamm#465": ("pybamm-team__PyBaMM__465", "pybamm-team/PyBaMM#465"),
     "networkx#4909": ("networkx__networkx__4909", "networkx/networkx#4909"),
+    # ── neptune-pulled missing-env tasks (2026-09-04, for the 30/10 expansion) ──
+    "dask#11464": ("dask__dask__11464", "dask/dask#11464"),
+    "dask#11493": ("dask__dask__11493", "dask/dask#11493"),
+    "dask#11496": ("dask__dask__11496", "dask/dask#11496"),
+    "dask#11600": ("dask__dask__11600", "dask/dask#11600"),
+    "dask#11687": ("dask__dask__11687", "dask/dask#11687"),
+    "dask#11736": ("dask__dask__11736", "dask/dask#11736"),
+    "dask#11754": ("dask__dask__11754", "dask/dask#11754"),
+    "dask#11760": ("dask__dask__11760", "dask/dask#11760"),
+    "dask#11788": ("dask__dask__11788", "dask/dask#11788"),
+    "geopandas#3282": ("geopandas__geopandas__3282", "geopandas/geopandas#3282"),
+    "geopandas#3314": ("geopandas__geopandas__3314", "geopandas/geopandas#3314"),
+    "geopandas#2796": ("geopandas__geopandas__2796", "geopandas/geopandas#2796"),
+    "uxarray#877": ("UXARRAY__uxarray__877", "UXARRAY/uxarray#877"),
+    "uxarray#989": ("UXARRAY__uxarray__989", "UXARRAY/uxarray#989"),
+    "networkx#7736": ("networkx__networkx__7736", "networkx/networkx#7736"),
+    "networkx#8112": ("networkx__networkx__8112", "networkx/networkx#8112"),
+    "networkx#8135": ("networkx__networkx__8135", "networkx/networkx#8135"),
+    "tiled#954": ("bluesky__tiled__954", "bluesky/tiled#954"),
+    "flox#230": ("xarray-contrib__flox__230", "xarray-contrib/flox#230"),
 }
 
 

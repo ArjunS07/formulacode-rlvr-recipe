@@ -125,7 +125,15 @@ def build_config(task_key: str, task_dir: Path) -> dict:
             "delete": False,  # keep the trial dir for inspection + reward.json
             "suppress_override_warnings": True,
         },
-        "verifier": {"disable": False},
+        # The container's test.sh snapshot filter defaults to `^(lexer|verifier)\.`, which
+        # matches NO real ASV benchmark, so an oracle recorded without this override captures
+        # ZERO snapshot entries and every downstream agent verify is vacuous (always "passes").
+        # `.*` records every benchmark's behavior and MUST match the agent verify filter set in
+        # run_local_train_qwen.sh (harbor_trial_config.verifier.env.FORMULACODE_SNAPSHOT_FILTER=".*").
+        "verifier": {
+            "disable": False,
+            "env": {"FORMULACODE_SNAPSHOT_FILTER": os.environ.get("FORMULACODE_SNAPSHOT_FILTER", ".*")},
+        },
     }
 
 

@@ -29,15 +29,24 @@ ORACLE_RUNS = Path("/home/arjun/formulacode-rlvr-recipe/results/oracle-runs")
 TOKENS_ENV = Path("/home/arjun/datasmith/tokens.env")
 _UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
 
-# "owner/repo#issue" -> local oracle trial dir (has artifacts/.snapshots)
-GOLD = {
-    "geopandas/geopandas#3345": "geopandas_3345_oracle",
-    "xarray-contrib/flox#176": "flox_176_oracle",
-    "xarray-contrib/flox#172": "flox_172_oracle",
-    "TileDB-Inc/TileDB-Py#1005": "tiledb-py_1005_oracle",
-    "shapely/shapely#1307": "shapely_1307_oracle",
-    "UXARRAY/uxarray#1118": "uxarray_1118_oracle",
-}
+# "owner/repo#issue" -> local oracle trial dir name (under ORACLE_RUNS, has artifacts/.snapshots).
+# Built from oracle_gold.GOLD_TASKS so publish + the gateway's local fallback cover the WHOLE
+# cohort, not a hardcoded 6 (a stale 6-task list is exactly why 24/30 train baselines were never
+# published to prod). oracle_gold's top-level imports are stdlib-only, so this pulls no heavy deps;
+# its trial dir naming (build_config) is `{task_key with # and / -> _}_oracle`. Both consumers
+# (publish main, gateway _local_lookup) guard for the dir actually existing on disk.
+def _build_gold() -> dict[str, str]:
+    try:
+        from oracle_gold import GOLD_TASKS
+    except Exception:  # noqa: BLE001 — fall back to nothing rather than crash the gateway import
+        return {}
+    return {
+        label: f"{task_key.replace('#', '_').replace('/', '_')}_oracle"
+        for task_key, (_dir, label) in GOLD_TASKS.items()
+    }
+
+
+GOLD = _build_gold()
 
 
 def _load_tokens() -> dict[str, str]:
